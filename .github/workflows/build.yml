@@ -13,6 +13,9 @@ jobs:
         wget -q https://github.com/theos/sdks/archive/master.zip
         unzip master.zip -d $THEOS/sdks
         mv $THEOS/sdks/sdks-master/*.sdk $THEOS/sdks/
+    - name: Install ldid
+      run: |
+        brew install ldid
     - name: Build
       run: |
         export THEOS=${{ github.workspace }}/theos
