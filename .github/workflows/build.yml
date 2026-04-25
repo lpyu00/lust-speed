@@ -1,0 +1,24 @@
+name: Build dylib
+on: push
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Setup Theos
+      run: |
+        git clone --recursive https://github.com/theos/theos.git /usr/local/theos
+        echo "THEOS=/usr/local/theos" >> $GITHUB_ENV
+        wget -q https://github.com/theos/sdks/archive/master.zip
+        unzip master.zip -d /usr/local/theos/sdks
+        mv /usr/local/theos/sdks/sdks-master/*.sdk /usr/local/theos/sdks/
+    - name: Build
+      run: |
+        export THEOS=/usr/local/theos
+        export PATH=$THEOS/bin:$PATH
+        make package FINALPACKAGE=1
+    - name: Upload dylib
+      uses: actions/upload-artifact@v4
+      with:
+        name: LustSpeed.dylib
+        path: .theos/obj/LustSpeed.dylib
