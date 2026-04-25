@@ -4,24 +4,27 @@
 static void (*set_timeScale)(float) = NULL;
 static UIButton *floatBtn = nil;
 static BOOL speedOn = NO;
-static float currentSpeed = 5.0; // 默认倍数，不再写死
-static intptr_t unity_base_addr = 0; // 存一下基址用来做安全校验
+static float currentSpeed = 5.0; 
+static intptr_t unity_base_addr = 0; 
+static CADisplayLink *speedGuard = nil; 
+static BOOL isAlertShowing = NO; 
 
 @interface SpeedHackUI : NSObject
-+ (void)btnTapped;
++ (void)btnTapped:(UITapGestureRecognizer *)tap;
 + (void)btnDragged:(UIPanGestureRecognizer *)pan;
 + (void)btnLongPressed:(UILongPressGestureRecognizer *)press;
++ (void)keepSpeed:(CADisplayLink *)link;
 @end
 
 @implementation SpeedHackUI
-+ (void)btnTapped {
++ (void)btnTapped:(UITapGestureRecognizer *)tap {
     speedOn = !speedOn;
+    
     dispatch_async(dispatch_get_main_queue(), ^{
         [floatBtn setTitle:speedOn ? [NSString stringWithFormat:@"%.0fx", currentSpeed] : @"1x" forState:UIControlStateNormal];
         floatBtn.backgroundColor = speedOn ? [UIColor systemGreenColor] : [UIColor systemRedColor];
     });
     
-    // 【优化1：添加地址安全范围校验】
     if (set_timeScale && (intptr_t)set_timeScale > unity_base_addr && (intptr_t)set_timeScale < unity_base_addr + 0x10000000) {
         set_timeScale(speedOn ? currentSpeed : 1.0);
     }
@@ -34,31 +37,54 @@ static intptr_t unity_base_addr = 0; // 存一下基址用来做安全校验
     [pan setTranslation:CGPointZero inView:v.superview];
 }
 
-// 【优化3：新增长按弹出调速菜单】
 + (void)btnLongPressed:(UILongPressGestureRecognizer *)press {
     if (press.state == UIGestureRecognizerStateBegan) {
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"速度设置" message:@"选择全局加速倍率" preferredStyle:UIAlertControllerStyleActionSheet];
+        if (isAlertShowing) return; 
+        isAlertShowing = YES;
+
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"速度设置" 
+                                                                       message:@"选择全局加速倍率" 
+                                                                preferredStyle:UIAlertControllerStyleActionSheet];
         
         NSArray *speeds = @[@1.0, @2.0, @3.0, @5.0, @10.0];
         for (NSNumber *s in speeds) {
-            [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 倍速", s] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 倍速", s] 
+                                                      style:UIAlertActionStyleDefault 
+                                                    handler:^(UIAlertAction *action) {
                 currentSpeed = [s floatValue];
-                if (speedOn) {
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        [floatBtn setTitle:[NSString stringWithFormat:@"%.0fx", currentSpeed] forState:UIControlStateNormal];
-                    });
-                    if (set_timeScale) set_timeScale(currentSpeed);
+                
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [floatBtn setTitle:speedOn ? [NSString stringWithFormat:@"%.0fx", currentSpeed] : @"1x" forState:UIControlStateNormal];
+                    floatBtn.backgroundColor = speedOn ? [UIColor systemGreenColor] : [UIColor systemRedColor];
+                });
+                
+                if (speedOn && set_timeScale && (intptr_t)set_timeScale > unity_base_addr && (intptr_t)set_timeScale < unity_base_addr + 0x10000000) {
+                    set_timeScale(currentSpeed);
                 }
+                
+                isAlertShowing = NO; 
             }]];
         }
-        [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
         
-        UIViewController *rootVC = floatBtn.window.rootViewController;
-        if (rootVC.presentedViewController) rootVC = rootVC.presentedViewController;
-        [rootVC presentViewController:alert animated:YES completion:nil];
+        [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
+            isAlertShowing = NO; 
+        }]];
+        
+        UIViewController *topVC = floatBtn.window.rootViewController;
+        while (topVC.presentedViewController) {
+            topVC = topVC.presentedViewController;
+        }
+        [topVC presentViewController:alert animated:YES completion:nil];
+    }
+}
+
++ (void)keepSpeed:(CADisplayLink *)link {
+    if (speedOn && set_timeScale && (intptr_t)set_timeScale > unity_base_addr && (intptr_t)set_timeScale < unity_base_addr + 0x10000000) {
+        set_timeScale(currentSpeed);
     }
 }
 @end
+
 
 static void initSpeedHack() {
     for (uint32_t i = 0; i < _dyld_image_count(); i++) {
@@ -91,33 +117,31 @@ static void initSpeedHack() {
             [floatBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
             [floatBtn.titleLabel setFont:[UIFont boldSystemFontOfSize:18]];
             
-            [floatBtn addTarget:[SpeedHackUI class] action:@selector(btnTapped) forControlEvents:UIControlEventTouchUpInside];
+            UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:[SpeedHackUI class] action:@selector(btnTapped:)];
+            UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:[SpeedHackUI class] action:@selector(btnLongPressed:)];
+            [tap requireGestureRecognizerToFail:longPress]; 
             
             UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:[SpeedHackUI class] action:@selector(btnDragged:)];
-            [floatBtn addGestureRecognizer:pan];
             
-            // 绑定长按事件
-            UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:[SpeedHackUI class] action:@selector(btnLongPressed:)];
+            [floatBtn addGestureRecognizer:tap];
             [floatBtn addGestureRecognizer:longPress];
+            [floatBtn addGestureRecognizer:pan];
             
             [win addSubview:floatBtn];
             [win bringSubviewToFront:floatBtn];
             
-            // 【优化2：换用更健壮的 CADisplayLink 绑定屏幕刷新率】
-            CADisplayLink *displayLink = [CADisplayLink displayLinkWithTarget:[SpeedHackUI class] selector:@selector(keepSpeed)];
-            [displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+            speedGuard = [CADisplayLink displayLinkWithTarget:[SpeedHackUI class] selector:@selector(keepSpeed:)];
+            
+            // 【终极完美调校】：每秒 2 次，完美平衡极低耗电与无感响应！
+            if (@available(iOS 15.0, *)) {
+                speedGuard.preferredFrameRateRange = CAFrameRateRangeMake(2, 2, 2);
+            } else {
+                speedGuard.preferredFramesPerSecond = 2;
+            }
+            [speedGuard addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
         }
     });
 }
-
-// 补充 CADisplayLink 的执行方法
-@implementation SpeedHackUI (DisplayLink)
-+ (void)keepSpeed {
-    if (speedOn && set_timeScale && (intptr_t)set_timeScale > unity_base_addr && (intptr_t)set_timeScale < unity_base_addr + 0x10000000) {
-        set_timeScale(currentSpeed);
-    }
-}
-@end
 
 __attribute__((constructor)) static void main_entry() {
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification 
