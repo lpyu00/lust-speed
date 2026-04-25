@@ -1,31 +1,21 @@
 #import <UIKit/UIKit.h>
 #import <mach-o/dyld.h>
-#include <string.h>
-
-// 1. 特征码
-static const uint8_t kPattern[] = {0xE9, 0x23, 0xBD, 0x6D, 0xF4, 0x4F, 0x01, 0xA9, 0xFD, 0x7B, 0x02, 0xA9};
-
-static void* scanPattern(const uint8_t *base, size_t size) {
-    for (size_t i = 0; i < size - sizeof(kPattern); i++) {
-        if (memcmp(base + i, kPattern, sizeof(kPattern)) == 0) {
-            return (void *)(base + i);
-        }
-    }
-    return NULL;
-}
 
 static void (*set_timeScale)(float) = NULL;
 static UIButton *floatBtn = nil;
 static BOOL speedOn = NO;
 
-// 2. 按钮逻辑
+// 1. 按钮点击与拖拽逻辑
 void toggleSpeed() {
     speedOn = !speedOn;
     dispatch_async(dispatch_get_main_queue(), ^{
         [floatBtn setTitle:speedOn ? @"5x" : @"1x" forState:UIControlStateNormal];
         floatBtn.backgroundColor = speedOn ? [UIColor systemGreenColor] : [UIColor systemRedColor];
     });
-    if (set_timeScale) set_timeScale(speedOn ? 5.0 : 1.0);
+    // 点击按钮时，直接向引擎发送倍速指令
+    if (set_timeScale) {
+        set_timeScale(speedOn ? 5.0 : 1.0);
+    }
 }
 
 void dragButton(UIPanGestureRecognizer *g) {
@@ -35,9 +25,10 @@ void dragButton(UIPanGestureRecognizer *g) {
     [g setTranslation:CGPointZero inView:v.superview];
 }
 
-// 3. 核心初始化逻辑（完全剥离 %hook）
+// 2. 核心初始化逻辑（直接使用精准地址，拒绝暴力扫描）
 static void initSpeedHack() {
     intptr_t base_addr = 0;
+    // 获取游戏引擎基址 (这和我们用 Frida 获取基址的原理一模一样)
     for (uint32_t i = 0; i < _dyld_image_count(); i++) {
         if (strstr(_dyld_get_image_name(i), "UnityFramework")) {
             base_addr = (intptr_t)_dyld_get_image_header(i);
@@ -45,18 +36,13 @@ static void initSpeedHack() {
         }
     }
     
+    // 如果找到了引擎
     if (base_addr != 0) {
-        // 【核心修复】先直接校验你找到的那个绝密地址 (极速秒开)
-        void *expected_ptr = (void *)(base_addr + 0x85D2418);
-        if (memcmp(expected_ptr, kPattern, sizeof(kPattern)) == 0) {
-            set_timeScale = (void (*)(float))expected_ptr;
-        } else {
-            // 如果游戏更新地址变了，扩大扫描范围到 200MB (0x0C800000) 暴力搜！
-            set_timeScale = (void (*)(float))scanPattern((const uint8_t *)base_addr, 0x0C800000);
-        }
+        // 直接使用你辛辛苦苦挖出来的绝密坐标，不再进行任何危险扫描！
+        set_timeScale = (void (*)(float))(base_addr + 0x85D2418);
     }
     
-    // 延迟 3 秒贴按钮
+    // 延迟 3 秒等游戏画面渲染完，贴上按钮
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         UIWindow *win = nil;
         for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
@@ -67,8 +53,8 @@ static void initSpeedHack() {
         }
         if (!win) win = [UIApplication sharedApplication].keyWindow;
 
-        if (win && set_timeScale) {
-            // 找到了！贴按钮！
+        // 只要画面准备好了，不管三七二十一，直接把按钮扔上去
+        if (win) {
             floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
             floatBtn.frame = CGRectMake(20, 100, 60, 60);
             floatBtn.backgroundColor = [UIColor systemRedColor];
@@ -83,23 +69,16 @@ static void initSpeedHack() {
             
             [win addSubview:floatBtn];
             
+            // 死循环踩油门：防止游戏自动把速度重置为 1
             [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *timer) {
                 if (speedOn && set_timeScale) set_timeScale(5.0);
             }];
-        } else if (win && !set_timeScale) {
-            // 找不到了！弹出报警弹窗！
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"扫描失败" 
-                                                                           message:@"由于范围或特征码变动，无法定位加速引擎！" 
-                                                                    preferredStyle:UIAlertControllerStyleAlert];
-            [alert addAction:[UIAlertAction actionWithTitle:@"确认" style:UIAlertActionStyleDefault handler:nil]];
-            [win.rootViewController presentViewController:alert animated:YES completion:nil];
         }
     });
 }
 
-// 4. 【灵魂修复】C语言底层入口，插件被加载瞬间自动执行！不需要越狱环境！
+// 3. 插件启动入口（监听游戏进入前台瞬间触发）
 __attribute__((constructor)) static void main_entry() {
-    // 监听苹果系统原生广播：当 App 启动完成进入前台时
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification 
                                                       object:nil 
                                                        queue:[NSOperationQueue mainQueue] 
