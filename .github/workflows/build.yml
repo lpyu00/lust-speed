@@ -7,14 +7,15 @@ jobs:
     - uses: actions/checkout@v3
     - name: Setup Theos
       run: |
-        git clone --recursive https://github.com/theos/theos.git /usr/local/theos
-        echo "THEOS=/usr/local/theos" >> $GITHUB_ENV
+        export THEOS=${{ github.workspace }}/theos
+        echo "THEOS=$THEOS" >> $GITHUB_ENV
+        git clone --recursive https://github.com/theos/theos.git $THEOS
         wget -q https://github.com/theos/sdks/archive/master.zip
-        unzip master.zip -d /usr/local/theos/sdks
-        mv /usr/local/theos/sdks/sdks-master/*.sdk /usr/local/theos/sdks/
+        unzip master.zip -d $THEOS/sdks
+        mv $THEOS/sdks/sdks-master/*.sdk $THEOS/sdks/
     - name: Build
       run: |
-        export THEOS=/usr/local/theos
+        export THEOS=${{ github.workspace }}/theos
         export PATH=$THEOS/bin:$PATH
         make package FINALPACKAGE=1
     - name: Upload dylib
