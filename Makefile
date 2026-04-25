@@ -10,3 +10,4 @@ LustSpeed_FRAMEWORKS = UIKit Foundation
 LustSpeed_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
 
 include $(THEOS_MAKE_PATH)/library.mk
+ 
